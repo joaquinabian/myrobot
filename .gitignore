@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Entornos virtuales
+.venv/
+venv/
+
+# Configuración privada
+.env
+.env.*
+!.env.example
+
+# Modelos de voz locales: no subir a GitHub
+voices/
+
+# Archivos de ejecución
+*.log
