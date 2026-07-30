@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$HOME/programas/myrobot_03"
+cd "$HOME/programas/myrobot"
 source .venv/bin/activate
 
 sudo apt update

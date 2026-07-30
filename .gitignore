@@ -17,5 +17,17 @@ venv/
 # Modelos de voz locales: no subir a GitHub
 voices/
 
+# Datos biométricos y artefactos derivados
+dataset/
+output/candidates/
+output/face_sequence.avi
+
 # Archivos de ejecución
 *.log
+logs/
+
+# Resultados regenerables
+output/face_*.json
+
+# Configuración local del editor
+.vscode/

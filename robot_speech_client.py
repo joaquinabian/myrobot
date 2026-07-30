@@ -9,25 +9,28 @@
 # Other features:
 # - Lists microphone devices with --list-mics.
 # - Uses configurable --mic-index.
-# - Reconnects to the server automatically.
+# - Reconnects to the server for later commands.
 # - Sends commands terminated with "\n".
 # - Normalizes Spanish phrases into simple robot commands.
-# - Does not speak locally by default.
+# - Speaks recognition and calibration messages locally.
 #
 # ASCII only.
 
 import argparse
 import re
+import select
 import socket
-import subprocess
 import time
 import unicodedata
 
 import speech_recognition as sr
 
+from tts_engine import TtsConfig, TtsEngine
+
 
 HOST = "127.0.0.1"
 PORT = 65001
+DEFAULT_TTS_MODEL = "voices/es_ES-davefx-medium.onnx"
 VALID_COMMANDS = {"arriba", "abajo", "izquierda", "derecha"}
 
 
@@ -88,14 +91,25 @@ def parse_args():
     parser.add_argument("--min-command-interval", type=float, default=0.8,
                         help="minimum seconds between sent commands")
 
-    parser.add_argument("--echo", action="store_true",
-                        help="say locally what was recognized using espeak-ng/espeak")
-    parser.add_argument("--say-command", default="espeak-ng",
-                        help="local echo command")
-    parser.add_argument("--say-voice", default="es",
-                        help="local echo voice")
-    parser.add_argument("--say-speed", type=int, default=145,
-                        help="local echo speed")
+    parser.set_defaults(echo=True)
+    parser.add_argument("--echo", dest="echo", action="store_true",
+                        help="enable local speech (default)")
+    parser.add_argument("--no-echo", dest="echo", action="store_false",
+                        help="disable local speech")
+    parser.add_argument("--tts-engine", choices=["none", "espeak", "piper"],
+                        default="piper", help="local speech engine")
+    parser.add_argument("--tts-model", default=DEFAULT_TTS_MODEL,
+                        help="Piper ONNX model path")
+    parser.add_argument("--tts-voice", default="es",
+                        help="espeak/espeak-ng voice")
+    parser.add_argument("--tts-speed", type=int, default=145,
+                        help="espeak speech speed")
+    parser.add_argument("--tts-volume", type=int, default=100,
+                        help="espeak speech volume")
+    parser.add_argument("--tts-leading-silence-ms", type=int, default=350,
+                        help="silence added before Piper audio")
+    parser.add_argument("--player-command", default="aplay",
+                        help="audio player command")
     parser.add_argument("--print-raw", action="store_true",
                         help="print every recognized raw phrase")
 
@@ -152,6 +166,7 @@ class ServerConnection:
         self.require_server = require_server
         self.sock = None
         self.last_try = 0.0
+        self.buffer = b""
 
     def connect(self, force=False):
         if self.no_server:
@@ -183,14 +198,12 @@ class ServerConnection:
             except OSError:
                 pass
             self.sock = None
+            self.buffer = b""
 
     def send(self, command):
         if self.no_server:
             print(f"no-server command: {command}")
             return False
-
-        if self.sock is None:
-            self.connect(force=True)
 
         if self.sock is None:
             print(f"command not sent: {command}")
@@ -204,33 +217,51 @@ class ServerConnection:
         except OSError as exc:
             print(f"speech server disconnected: {exc}")
             self.close()
+            return False
 
-        if self.connect(force=True) and self.sock is not None:
+    def receive_speech(self):
+        if self.sock is None:
+            return []
+
+        readable, _, _ = select.select([self.sock], [], [], 0)
+        if readable:
             try:
-                self.sock.sendall(message)
-                print(f"sent command after reconnect: {command}")
-                return True
+                data = self.sock.recv(4096)
             except OSError as exc:
-                print(f"retry failed: {exc}")
+                print(f"speech server disconnected: {exc}")
                 self.close()
+                return []
+            if not data:
+                self.close()
+                return []
+            self.buffer += data
 
-        return False
+        messages = []
+        while b"\n" in self.buffer:
+            line, self.buffer = self.buffer.split(b"\n", 1)
+            text = line.decode("utf-8", errors="replace")
+            if text.startswith("say\t"):
+                messages.append(text[4:])
+        return messages
 
 
-def say_local(args, text):
-    if not args.echo:
-        return
+def say_local(speaker, text, source=None):
+    input_stream = None
+    if source is not None and source.stream is not None:
+        input_stream = source.stream.pyaudio_stream
+        input_stream.stop_stream()
 
-    cmd = [
-        args.say_command,
-        "-v", args.say_voice,
-        "-s", str(args.say_speed),
-        text,
-    ]
     try:
-        subprocess.Popen(cmd)
-    except OSError as exc:
-        print(f"local echo failed: {exc}")
+        speaker.say(text)
+    finally:
+        if input_stream is not None:
+            input_stream.start_stream()
+
+
+def play_server_speech(connection, speaker, source):
+    for text in connection.receive_speech():
+        print(f"server says: {text}")
+        say_local(speaker, text, source)
 
 
 def make_microphone(mic_index):
@@ -242,9 +273,11 @@ def make_microphone(mic_index):
     return sr.Microphone(device_index=mic_index)
 
 
-def calibrate_source(recognizer, source, args):
+def calibrate_source(recognizer, source, speaker, args):
     print("Calibrating ambient noise")
     print("Please keep silent")
+    say_local(speaker, "Voy a calcular el ruido de fondo. Silencio por favor",
+              source)
 
     recognizer.adjust_for_ambient_noise(source, duration=args.ambient_duration)
     recognizer.energy_threshold += args.energy_offset
@@ -252,12 +285,14 @@ def calibrate_source(recognizer, source, args):
 
     print(f"energy_threshold: {recognizer.energy_threshold}")
     print(f"dynamic_energy_threshold: {recognizer.dynamic_energy_threshold}")
+    say_local(speaker, "Ruido de fondo calculado", source)
 
 
-def listen_loop(recognizer, source, connection, args):
+def listen_loop(recognizer, source, connection, speaker, args):
     last_command_time = 0.0
 
     while True:
+        play_server_speech(connection, speaker, source)
         try:
             audio = recognizer.listen(source, timeout=args.timeout,
                                       phrase_time_limit=args.phrase_time_limit)
@@ -268,6 +303,8 @@ def listen_loop(recognizer, source, connection, args):
             if args.print_raw or command:
                 print(f"heard: {text}")
                 print(f"normalized: {normalized}")
+
+            say_local(speaker, f"Has dicho {text}", source)
 
             if not command:
                 print("no valid command")
@@ -281,7 +318,6 @@ def listen_loop(recognizer, source, connection, args):
             last_command_time = now
             print(f"command: {command}")
             connection.send(command)
-            say_local(args, command)
 
             if args.pause_after_command > 0:
                 time.sleep(args.pause_after_command)
@@ -290,6 +326,7 @@ def listen_loop(recognizer, source, connection, args):
             print("silent")
         except sr.UnknownValueError:
             print("speech not understood")
+            say_local(speaker, "¿Qué?", source)
             if args.pause_after_error > 0:
                 time.sleep(args.pause_after_error)
         except sr.RequestError as exc:
@@ -315,14 +352,24 @@ def main():
 
     recognizer = sr.Recognizer()
     microphone = make_microphone(args.mic_index)
+    speaker = TtsEngine(TtsConfig(
+        engine=args.tts_engine,
+        voice=args.tts_voice,
+        speed=args.tts_speed,
+        volume=args.tts_volume,
+        piper_model=args.tts_model,
+        player_command=args.player_command,
+        leading_silence_ms=args.tts_leading_silence_ms,
+        enabled=args.echo,
+    ))
 
     print("Opening microphone stream")
 
     try:
         with microphone as source:
-            calibrate_source(recognizer, source, args)
+            calibrate_source(recognizer, source, speaker, args)
             print("speech client ready")
-            listen_loop(recognizer, source, connection, args)
+            listen_loop(recognizer, source, connection, speaker, args)
 
     except KeyboardInterrupt:
         print("\nSpeech client stopped")

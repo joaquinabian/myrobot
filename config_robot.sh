@@ -1,4 +1,4 @@
-# Runtime configuration for myrobot_03.
+# Runtime configuration for myrobot.
 # This file is sourced by run_robot.sh.
 # Values can still be overridden from the command line:
 #   VIDEO_MAX_STEP=4 ./run_robot.sh
@@ -33,12 +33,12 @@ TTS_LEADING_SILENCE_MS="350"
 TTS_DEBUG="0"
 
 # Video tracking, validated on RPi5 + C920 + Crickit
-VIDEO_INTERVAL="0.18"
-VIDEO_DEADBAND_X="30"
-VIDEO_DEADBAND_Y="30"
-VIDEO_PIXELS_PER_DEGREE_X="35"
-VIDEO_PIXELS_PER_DEGREE_Y="35"
-VIDEO_MAX_STEP="3"
+VIDEO_INTERVAL="0.08"
+VIDEO_DEADBAND_X="35"
+VIDEO_DEADBAND_Y="35"
+VIDEO_PIXELS_PER_DEGREE_X="45"
+VIDEO_PIXELS_PER_DEGREE_Y="45"
+VIDEO_MAX_STEP="2"
 INVERT_VIDEO_X="0"
 INVERT_VIDEO_Y="0"
 
@@ -46,7 +46,7 @@ INVERT_VIDEO_Y="0"
 VIDEO_EXTRA_ARGS="--send-unknown"
 
 # Speech client
-MIC_INDEX="1"
+MIC_INDEX=""
 SPEECH_EXTRA_ARGS="--print-raw --pause-after-command 0.2 --min-command-interval 0.35"
 
 # Log directory

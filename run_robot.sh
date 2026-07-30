@@ -38,18 +38,18 @@ NO_SPEECH="${NO_SPEECH:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 DEBUG="${DEBUG:-0}"
 
-MIC_INDEX="${MIC_INDEX:-1}"
+MIC_INDEX="${MIC_INDEX:-}"
 
 TTS_ENGINE="${TTS_ENGINE:-piper}"
 TTS_MODEL="${TTS_MODEL:-voices/es_ES-davefx-medium.onnx}"
 TTS_LEADING_SILENCE_MS="${TTS_LEADING_SILENCE_MS:-350}"
 
-VIDEO_INTERVAL="${VIDEO_INTERVAL:-0.18}"
-VIDEO_DEADBAND_X="${VIDEO_DEADBAND_X:-30}"
-VIDEO_DEADBAND_Y="${VIDEO_DEADBAND_Y:-30}"
-VIDEO_PIXELS_PER_DEGREE_X="${VIDEO_PIXELS_PER_DEGREE_X:-35}"
-VIDEO_PIXELS_PER_DEGREE_Y="${VIDEO_PIXELS_PER_DEGREE_Y:-35}"
-VIDEO_MAX_STEP="${VIDEO_MAX_STEP:-3}"
+VIDEO_INTERVAL="${VIDEO_INTERVAL:-0.08}"
+VIDEO_DEADBAND_X="${VIDEO_DEADBAND_X:-35}"
+VIDEO_DEADBAND_Y="${VIDEO_DEADBAND_Y:-35}"
+VIDEO_PIXELS_PER_DEGREE_X="${VIDEO_PIXELS_PER_DEGREE_X:-45}"
+VIDEO_PIXELS_PER_DEGREE_Y="${VIDEO_PIXELS_PER_DEGREE_Y:-45}"
+VIDEO_MAX_STEP="${VIDEO_MAX_STEP:-2}"
 
 VIDEO_EXTRA_ARGS="${VIDEO_EXTRA_ARGS:---send-unknown}"
 SPEECH_EXTRA_ARGS="${SPEECH_EXTRA_ARGS:---print-raw --pause-after-command 0.2 --min-command-interval 0.35}"
@@ -68,6 +68,7 @@ VIDEO_LOG="$LOG_DIR/video.log"
 SPEECH_LOG="$LOG_DIR/speech.log"
 
 PIDS=()
+STOPPED=0
 
 log() {
     local msg="$*"
@@ -81,6 +82,11 @@ die() {
 }
 
 stop_all() {
+    if [[ "$STOPPED" == "1" ]]; then
+        return
+    fi
+    STOPPED=1
+
     if [[ "${#PIDS[@]}" -gt 0 ]]; then
         log "stopping components"
         for pid in "${PIDS[@]}"; do
@@ -211,6 +217,7 @@ log "run id: $RUN_ID"
 log "python: $PYTHON"
 
 server_args=(
+    "-u"
     "$SERVER_SCRIPT"
     "--host" "$HOST"
     "--video-port" "$VIDEO_PORT"
@@ -255,10 +262,29 @@ if ! wait_for_port "$HOST" "$SPEECH_PORT" "speech" 20; then
     die "speech port did not become ready"
 fi
 
+if [[ "$NO_SPEECH" != "1" ]]; then
+    # shellcheck disable=SC2206
+    speech_extra_array=($SPEECH_EXTRA_ARGS)
+    speech_args=(
+        "-u"
+        "$SPEECH_SCRIPT"
+        "--host" "$HOST"
+        "--port" "$SPEECH_PORT"
+    )
+    if [[ -n "$MIC_INDEX" ]]; then
+        speech_args+=("--mic-index" "$MIC_INDEX")
+    fi
+    speech_args+=("${speech_extra_array[@]}")
+    start_component "speech" "$SPEECH_LOG" "$PYTHON" "${speech_args[@]}"
+else
+    log "speech disabled"
+fi
+
 if [[ "$NO_VIDEO" != "1" ]]; then
     # shellcheck disable=SC2206
     video_extra_array=($VIDEO_EXTRA_ARGS)
     video_args=(
+        "-u"
         "$VIDEO_SCRIPT"
         "--host" "$HOST"
         "--port" "$VIDEO_PORT"
@@ -267,21 +293,6 @@ if [[ "$NO_VIDEO" != "1" ]]; then
     start_component "video" "$VIDEO_LOG" "$PYTHON" "${video_args[@]}"
 else
     log "video disabled"
-fi
-
-if [[ "$NO_SPEECH" != "1" ]]; then
-    # shellcheck disable=SC2206
-    speech_extra_array=($SPEECH_EXTRA_ARGS)
-    speech_args=(
-        "$SPEECH_SCRIPT"
-        "--host" "$HOST"
-        "--port" "$SPEECH_PORT"
-        "--mic-index" "$MIC_INDEX"
-    )
-    speech_args+=("${speech_extra_array[@]}")
-    start_component "speech" "$SPEECH_LOG" "$PYTHON" "${speech_args[@]}"
-else
-    log "speech disabled"
 fi
 
 monitor_components
