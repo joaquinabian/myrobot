@@ -36,6 +36,22 @@ START_ANGLE_2 = 73
 
 SPEECH_STEP = 20
 IR_STEP = 2
+IDENTITY_MAX_AGE = 2.0
+
+# Recognition label -> phrase spoken for identity questions.
+IDENTITY_RESPONSES = {
+    "joaquin": (
+        "Tú eres Joaquín Abián, el tío fétido de Arlet y Lluc"
+    ),
+    "arlet": (
+        "Tú eres una Perich, hermana de Lluc y la sobrina preferida "
+        "de Joaquín"
+    ),
+    "lluc": (
+        "Tú eres un Perich, hermano mayor de Arlet y el sobrino preferido "
+        "de Joaquín"
+    ),
+}
 
 
 class DummyServo:
@@ -179,6 +195,24 @@ class LatestVideoState:
                 self.seq, self.dx, self.dy, self.name, self.time,
                 self.clients > 0,
             )
+
+
+def identity_response(video_state, now=None):
+    now = time.time() if now is None else now
+    _seq, _dx, _dy, name, msg_time, connected = video_state.snapshot()
+    normalized_name = name.strip().lower()
+
+    if (
+        not connected
+        or not normalized_name
+        or normalized_name == "unknown"
+        or now - msg_time > IDENTITY_MAX_AGE
+    ):
+        return "No sé quién eres"
+
+    return IDENTITY_RESPONSES.get(
+        normalized_name, f"Creo que eres {name.strip()}"
+    )
 
 
 class StopState:
@@ -570,12 +604,14 @@ class VideoControlThread(threading.Thread):
 
 
 class SpeechClientThread(threading.Thread):
-    def __init__(self, conn, address, servos, say_helper, stop_state):
+    def __init__(self, conn, address, servos, say_helper, video_state,
+                 stop_state):
         super().__init__(daemon=True)
         self.conn = conn
         self.address = address
         self.servos = servos
         self.say_helper = say_helper
+        self.video_state = video_state
         self.stop_state = stop_state
         self.reader = LineReceiver(conn)
         self.send_lock = threading.Lock()
@@ -612,6 +648,8 @@ class SpeechClientThread(threading.Thread):
                     self.servos.move_by(delta_1=SPEECH_STEP, smooth=False)
                 elif message == "abajo":
                     self.servos.move_by(delta_1=-SPEECH_STEP, smooth=False)
+                elif message == "quien_soy":
+                    self.send_speech(identity_response(self.video_state))
                 else:
                     print(f"unknown speech command: {message}")
         except OSError as exc:
@@ -626,11 +664,13 @@ class SpeechClientThread(threading.Thread):
 
 
 class SpeechAcceptThread(threading.Thread):
-    def __init__(self, server_sock, servos, say_helper, stop_state):
+    def __init__(self, server_sock, servos, say_helper, video_state,
+                 stop_state):
         super().__init__(daemon=True)
         self.server_sock = server_sock
         self.servos = servos
         self.say_helper = say_helper
+        self.video_state = video_state
         self.stop_state = stop_state
 
     def run(self):
@@ -641,7 +681,8 @@ class SpeechAcceptThread(threading.Thread):
             except OSError:
                 break
             thread = SpeechClientThread(
-                conn, address, self.servos, self.say_helper, self.stop_state
+                conn, address, self.servos, self.say_helper, self.video_state,
+                self.stop_state
             )
             thread.start()
 
@@ -845,7 +886,7 @@ def main():
     threads.append(video_control)
 
     speech_accept = SpeechAcceptThread(
-        speech_server, servos, say_helper, stop_state
+        speech_server, servos, say_helper, video_state, stop_state
     )
     speech_accept.start()
     threads.append(speech_accept)

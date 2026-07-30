@@ -145,6 +145,22 @@ Run all tests from the project root:
 
 Tests do not activate the camera, microphone, IR, GPIO or real servos.
 
+## Speech interaction
+
+The speech client classifies recognized text locally before asking Piper to
+speak. Movement commands receive a short action confirmation, common greetings,
+farewells and thanks receive a specific response, and `qué hora es` reads the
+Raspberry Pi local clock. Follow-ups such as `un poco más` repeat the last
+movement command. A repeated phrase is not spoken again for four seconds,
+although repeated movement commands are still sent. Long unknown phrases are
+acknowledged without reading the full transcription. This rule-based processing
+has no model or additional runtime dependency.
+
+Identity questions such as `quién soy yo` and `cómo me llamo` use the current
+fresh face-recognition label. `IDENTITY_RESPONSES` in `robot_server.py` maps a
+recognition label to any phrase that should be spoken. Unknown, stale or
+disconnected video identities are never guessed.
+
 ## Local data
 
 `dataset/`, `output/candidates/`, `output/face_sequence.avi` and `voices/`

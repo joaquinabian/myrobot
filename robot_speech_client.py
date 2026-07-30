@@ -22,6 +22,8 @@ import select
 import socket
 import time
 import unicodedata
+from dataclasses import dataclass
+from datetime import datetime
 
 import speech_recognition as sr
 
@@ -32,6 +34,32 @@ HOST = "127.0.0.1"
 PORT = 65001
 DEFAULT_TTS_MODEL = "voices/es_ES-davefx-medium.onnx"
 VALID_COMMANDS = {"arriba", "abajo", "izquierda", "derecha"}
+COMMAND_RESPONSES = {
+    "arriba": "Miro hacia arriba",
+    "abajo": "Miro hacia abajo",
+    "izquierda": "Miro hacia la izquierda",
+    "derecha": "Miro hacia la derecha",
+}
+FOLLOW_UP_PATTERNS = {
+    "un poco mas", "algo mas", "mas", "otra vez",
+}
+GREETING_PATTERNS = {
+    "hola", "buenos dias", "buenas tardes", "buenas noches",
+}
+FAREWELL_PATTERNS = {
+    "adios", "hasta luego", "hasta pronto", "nos vemos",
+}
+THANKS_PATTERNS = {
+    "gracias", "muchas gracias", "muy amable",
+}
+TIME_PATTERNS = {
+    "que hora es", "dime la hora", "tienes hora",
+}
+IDENTITY_QUESTION_PATTERNS = {
+    "quien soy", "quien soy yo", "como me llamo", "sabes quien soy",
+}
+DUPLICATE_RESPONSE_WINDOW = 4.0
+MAX_ECHO_WORDS = 8
 
 
 COMMAND_PATTERNS = [
@@ -154,6 +182,82 @@ def normalize_command(text):
         return matches[0]
 
     return ""
+
+
+@dataclass
+class InteractionState:
+    last_text: str = ""
+    last_response_time: float = 0.0
+    last_command: str = ""
+
+
+@dataclass(frozen=True)
+class InteractionDecision:
+    intent: str
+    command: str = ""
+    response: str = ""
+
+
+def local_time_response(local_datetime=None):
+    local_datetime = local_datetime or datetime.now()
+    hour = local_datetime.hour
+    minute = local_datetime.minute
+    prefix = "Es la" if hour == 1 else "Son las"
+    if minute == 0:
+        return f"{prefix} {hour} en punto"
+    return f"{prefix} {hour} y {minute:02d}"
+
+
+def decide_interaction(text, state, now=None, local_datetime=None):
+    """Classify recognized text and choose a short local response."""
+    now = time.monotonic() if now is None else now
+    normalized = normalize_text(text)
+
+    if not normalized:
+        return InteractionDecision("empty")
+
+    command = normalize_command(text)
+    if not command and normalized in FOLLOW_UP_PATTERNS:
+        command = state.last_command
+
+    if normalized in IDENTITY_QUESTION_PATTERNS:
+        intent = "identity"
+        command = "quien_soy"
+        response = ""
+    elif command:
+        intent = "command"
+        response = COMMAND_RESPONSES[command]
+        state.last_command = command
+    elif normalized in GREETING_PATTERNS:
+        intent = "greeting"
+        response = "Hola, te escucho"
+    elif normalized in FAREWELL_PATTERNS:
+        intent = "farewell"
+        response = "Hasta luego"
+    elif normalized in THANKS_PATTERNS:
+        intent = "thanks"
+        response = "De nada"
+    elif normalized in TIME_PATTERNS:
+        intent = "time"
+        response = local_time_response(local_datetime)
+    else:
+        intent = "unknown"
+        if len(normalized.split()) <= MAX_ECHO_WORDS:
+            response = f"Has dicho {text.strip()}"
+        else:
+            response = "Te he oído"
+
+    is_recent_duplicate = (
+        normalized == state.last_text
+        and now - state.last_response_time < DUPLICATE_RESPONSE_WINDOW
+    )
+    state.last_text = normalized
+    if is_recent_duplicate:
+        response = ""
+    elif response:
+        state.last_response_time = now
+
+    return InteractionDecision(intent, command, response)
 
 
 class ServerConnection:
@@ -290,6 +394,7 @@ def calibrate_source(recognizer, source, speaker, args):
 
 def listen_loop(recognizer, source, connection, speaker, args):
     last_command_time = 0.0
+    interaction_state = InteractionState()
 
     while True:
         play_server_speech(connection, speaker, source)
@@ -298,29 +403,32 @@ def listen_loop(recognizer, source, connection, speaker, args):
                                       phrase_time_limit=args.phrase_time_limit)
             text = recognizer.recognize_google(audio, language=args.language)
             normalized = normalize_text(text)
-            command = normalize_command(text)
+            decision = decide_interaction(text, interaction_state)
+            command = decision.command
 
             if args.print_raw or command:
                 print(f"heard: {text}")
                 print(f"normalized: {normalized}")
 
-            say_local(speaker, f"Has dicho {text}", source)
+            response = decision.response
+            if command:
+                now = time.time()
+                if now - last_command_time < args.min_command_interval:
+                    print(f"command ignored by interval: {command}")
+                    response = ""
+                else:
+                    last_command_time = now
+                    print(f"command: {command}")
+                    connection.send(command)
+
+            if response:
+                say_local(speaker, response, source)
+
+            if command and args.pause_after_command > 0:
+                time.sleep(args.pause_after_command)
 
             if not command:
-                print("no valid command")
-                continue
-
-            now = time.time()
-            if now - last_command_time < args.min_command_interval:
-                print(f"command ignored by interval: {command}")
-                continue
-
-            last_command_time = now
-            print(f"command: {command}")
-            connection.send(command)
-
-            if args.pause_after_command > 0:
-                time.sleep(args.pause_after_command)
+                print(f"speech intent: {decision.intent}")
 
         except sr.WaitTimeoutError:
             print("silent")

@@ -6,6 +6,7 @@ from robot_server import (
     LatestVideoState,
     ServoController,
     VideoControlThread,
+    identity_response,
     limited_delta,
 )
 
@@ -164,6 +165,78 @@ class LatestVideoStateTests(unittest.TestCase):
 
         state.client_disconnected()
         self.assertFalse(state.snapshot()[-1])
+
+    def test_known_fresh_identity_uses_configured_phrase(self):
+        state = LatestVideoState()
+        state.client_connected()
+        state.update(0, 0, "joaquin")
+        msg_time = state.snapshot()[4]
+
+        response = identity_response(state, now=msg_time + 0.5)
+
+        self.assertEqual(
+            response,
+            "Tú eres Joaquín Abián, el tío fétido de Arlet y Lluc",
+        )
+
+    def test_each_configured_identity_uses_its_phrase(self):
+        expected = {
+            "arlet": (
+                "Tú eres una Perich, hermana de Lluc y la sobrina preferida "
+                "de Joaquín"
+            ),
+            "lluc": (
+                "Tú eres un Perich, hermano mayor de Arlet y el sobrino "
+                "preferido de Joaquín"
+            ),
+        }
+
+        for name, phrase in expected.items():
+            with self.subTest(name=name):
+                state = LatestVideoState()
+                state.client_connected()
+                state.update(0, 0, name)
+                msg_time = state.snapshot()[4]
+
+                response = identity_response(state, now=msg_time + 0.5)
+
+                self.assertEqual(response, phrase)
+
+    def test_unconfigured_identity_uses_recognition_name(self):
+        state = LatestVideoState()
+        state.client_connected()
+        state.update(0, 0, "ana")
+        msg_time = state.snapshot()[4]
+
+        response = identity_response(state, now=msg_time + 0.5)
+
+        self.assertEqual(response, "Creo que eres ana")
+
+    def test_unknown_identity_is_not_guessed(self):
+        state = LatestVideoState()
+        state.client_connected()
+        state.update(0, 0, "unknown")
+        msg_time = state.snapshot()[4]
+
+        response = identity_response(state, now=msg_time + 0.5)
+
+        self.assertEqual(response, "No sé quién eres")
+
+    def test_stale_or_disconnected_identity_is_not_used(self):
+        state = LatestVideoState()
+        state.client_connected()
+        state.update(0, 0, "joaquin")
+        msg_time = state.snapshot()[4]
+
+        self.assertEqual(
+            identity_response(state, now=msg_time + 2.1),
+            "No sé quién eres",
+        )
+        state.client_disconnected()
+        self.assertEqual(
+            identity_response(state, now=msg_time + 0.5),
+            "No sé quién eres",
+        )
 
 
 if __name__ == "__main__":
