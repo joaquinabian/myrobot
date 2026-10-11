@@ -1,13 +1,41 @@
 import unittest
+from unittest import mock
+import signal
 
 import numpy as np
 
 from robot_video_client import (
+    ResourceCleanup,
     TargetSelector,
     assign_recognized_identities,
     is_exit_key,
+    request_exit,
     scale_yunet_face,
 )
+
+
+class ResourceCleanupTests(unittest.TestCase):
+    @mock.patch("robot_video_client.cv2.destroyAllWindows")
+    def test_cleanup_releases_all_resources_once(self, destroy_windows):
+        cleanup = ResourceCleanup()
+        cleanup.cap = mock.Mock()
+        cleanup.sock = mock.Mock()
+        cleanup.terminal_keys = mock.Mock()
+        cap = cleanup.cap
+        sock = cleanup.sock
+        terminal_keys = cleanup.terminal_keys
+
+        cleanup.close()
+        cleanup.close()
+
+        cap.release.assert_called_once_with()
+        sock.close.assert_called_once_with()
+        terminal_keys.restore.assert_called_once_with()
+        self.assertEqual(destroy_windows.call_count, 2)
+
+    def test_sigterm_requests_normal_interpreter_exit(self):
+        with self.assertRaisesRegex(SystemExit, str(128 + signal.SIGTERM)):
+            request_exit(signal.SIGTERM, None)
 
 
 def face(name, x, y, area=1000, confidence=0.9):

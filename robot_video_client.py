@@ -380,12 +380,39 @@ def assign_recognized_identities(candidates, recognized):
             remaining.remove(candidate_index)
 
 
+class ResourceCleanup:
+    def __init__(self):
+        self.cap = None
+        self.sock = None
+        self.terminal_keys = None
+
+    def close(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+        if self.terminal_keys is not None:
+            self.terminal_keys.restore()
+            self.terminal_keys = None
+        cv2.destroyAllWindows()
+
+
+def request_exit(signum, frame):
+    raise SystemExit(128 + signum)
+
+
 def main():
     args = parse_args()
+    cleanup = ResourceCleanup()
+    atexit.register(cleanup.close)
+    signal.signal(signal.SIGTERM, request_exit)
 
     sock = None
     if not args.no_server:
         sock = connect_server(args.host, args.port, args.require_server)
+        cleanup.sock = sock
 
     if args.face_backend == "sface":
         recognizer_path = args.recognizer or DEFAULT_SFACE_RECOGNIZER
@@ -417,15 +444,9 @@ def main():
 
     print("[INFO] starting video stream...")
     cap = open_camera(args.camera, args.width, args.height, args.fps)
-    atexit.register(cap.release)
-    atexit.register(cv2.destroyAllWindows)
+    cleanup.cap = cap
     terminal_keys = TerminalKeyReader()
-    atexit.register(terminal_keys.restore)
-
-    def request_exit(signum, frame):
-        raise SystemExit(128 + signum)
-
-    signal.signal(signal.SIGTERM, request_exit)
+    cleanup.terminal_keys = terminal_keys
     target_selector = TargetSelector(args.target_max_distance,
                                      args.target_hold_frames)
     window_name = "Face target"
@@ -603,13 +624,7 @@ def main():
         ok = cv2.imwrite(args.save_frame, last_frame)
         print("Saved frame:", ok, args.save_frame)
 
-    cap.release()
-
-    if sock is not None:
-        sock.close()
-
-    terminal_keys.restore()
-    cv2.destroyAllWindows()
+    cleanup.close()
 
 
 if __name__ == "__main__":
